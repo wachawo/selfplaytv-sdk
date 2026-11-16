@@ -42,7 +42,10 @@ dashboard, play a match, make a team and export one. It runs the same
 commands as this guide, as separate processes. An agent keeps using the
 commands below: they print, exit and can be checked, and the screen cannot.
 A person may have the TUI open on the same run at the same time; it shows
-whatever an agent starts or stops there.
+whatever an agent starts or stops there. Closing the TUI saves and stops the
+training it started; only its own setting "After quit: keep training" leaves
+one running. Never start a training on the person's machine they did not ask
+for, and never leave one running after you are done.
 
 A person can also skip every command: `bash start.sh` installs into `.venv/`
 on its first run and opens the TUI without a run, which is a list of their

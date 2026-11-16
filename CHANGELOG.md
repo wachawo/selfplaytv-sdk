@@ -90,6 +90,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Closing `sdk.tui` in any way (Q, a closed window, a dropped ssh, SIGTERM, a
+  crash, SIGKILL) saves and stops the training it started: it signals the
+  trainer and waits for the save, and a trainer whose app has gone stops by
+  itself. A training is left running in the background only when the row
+  "After quit" in the settings screen is set to "keep training"; it is "stop"
+  by default, and nothing else turns it on.
+- The default number of training threads is half the CPUs, for `sdk.train`,
+  the TUI and `sdk.doctor`, where it was all of them up to 16.
 - The share of a hit paid to the shooter's and the victim's teammates is
   credited with numpy instead of a Python loop per hit and slot. The order of
   every sum is kept, and a seeded run writes byte-identical checkpoints.

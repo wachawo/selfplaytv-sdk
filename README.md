@@ -18,8 +18,8 @@ Then choose NEW TEAM, type your team's name and pick its colour; the five
 players come with names already filled in. Enter on START, and your team is
 training against WHITE TEAM and BLACK TEAM while its matches play on the
 screen, one after another. `D` shows the scores, `T` stops the training and
-starts it again, and `Q` leaves while it goes on training. `bash start.sh`
-brings you back to the list of your teams.
+starts it again, and `Q` saves and stops the training as it leaves (so does
+closing the window). `bash start.sh` brings you back to the list of your teams.
 
 The first run installs everything into `.venv/` in this directory, which takes
 a few minutes; later runs open the screen at once. It needs Python 3.11 or
@@ -40,8 +40,8 @@ python -m sdk.tui runs/my
 
 In the terminal screen that opens, `T` starts the training and stops it, `S`
 and `W` change its settings and reward weights, `M` and then Enter play a
-match of your team, `D` is the dashboard, and `Q` leaves while the training
-goes on. The keys are always listed at the bottom of the screen. With an
+match of your team, `D` is the dashboard, and `Q` saves and stops the training
+as it leaves. The keys are always listed at the bottom of the screen. With an
 NVIDIA GPU, install torch from the index in [Requirements](#requirements)
 instead.
 
@@ -121,9 +121,10 @@ python -m sdk.tui runs/my
 The same journey from one terminal screen, by keys: `T` starts and stops the
 training, `S` and `W` change its settings and reward weights for the next
 start, `M` and then Enter play a match of the saved weights in the screen, `N`
-makes a team and `X` exports one. The trainer runs as a process of its own, so
-`Q`, a closed terminal or a dropped ssh leave it training, and the same command
-brings the screen back. Here it is at 80 by 24, training NEON FOXES, a copy of
+makes a team and `X` exports one. Closing the screen in any way, `Q`, a closed
+window or a dropped ssh, saves and stops the training it started. Only the row
+"After quit" in `S`, set to "keep training", leaves a training running in the
+background, and the same command brings the screen back to it. Here it is at 80 by 24, training NEON FOXES, a copy of
 WHITE TEAM that is paid less for rounds that end on the clock:
 
 ```

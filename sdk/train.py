@@ -171,13 +171,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default=None, help="cuda, cuda:1, cpu (default: cuda if available)")
     parser.add_argument("--gpu-memory", type=float, default=None,
                         help="fraction of the GPU's memory this process may take, 0..1")
-    parser.add_argument("--threads", type=int, default=min(16, os.cpu_count() or 1),
-                        help="threads for the simulation and for torch (default: the CPUs, 16 at most)")
+    # Half and not all: a run that takes every core leaves the machine unusable
+    # for everything else on it, and the speed lost to the other half is small.
+    parser.add_argument("--threads", type=int, default=max(1, (os.cpu_count() or 1) // 2),
+                        help="threads for the simulation and for torch (default: half the CPUs)")
     parser.add_argument("--seed", type=int, default=0,
                         help="seed of the maps, the lineups, the ends, the sampled actions and the "
                              "order the updates read them in (default 0)")
     parser.add_argument("--theme", default=None, help="one map theme (default: all of them)")
     parser.add_argument("--checkpoint-every", type=int, default=10, help="updates between saves")
+    # Internal, for sdk.tui: the pid of the app that started this training. The
+    # app signals its trainer when it closes, but a crash or a SIGKILL runs no
+    # code there, so the trainer checks for itself. Not in the help: a training
+    # outlives the app only when its settings say so, and from nowhere else.
+    parser.add_argument("--stop-with-parent", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--rewards", default=None, metavar="FILE",
                         help="a Lua file of reward weights, e.g. examples/rewards.lua; "
                              "check one with python -m sdk.rewards FILE")
@@ -1293,6 +1300,13 @@ def run_loop(args: argparse.Namespace, run: str, checkpoints: str, trainer: Any,
     ended = "stopped"
     try:
         while not stop["requested"]:
+            # Its parent, not any process with that pid: a child keeps its parent
+            # across start_new_session, and is handed to init or a subreaper the
+            # moment the parent dies, so a recycled pid is never mistaken for it.
+            if args.stop_with_parent is not None and os.getppid() != args.stop_with_parent:
+                logger.info("The app that started this training has closed; stopping")
+                ended = "the app closed"
+                break
             reason = budget_spent(trainer, args, started)
             if reason:
                 logger.info(f"{reason}; stopping")

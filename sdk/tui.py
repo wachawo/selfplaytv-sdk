@@ -111,6 +111,11 @@ REFUSALS = {"count": "a whole number, 1 or more", "seed": "a whole number, 0 or 
             "bundle": "no teams.json and manifest.json there"}
 NUMBER = re.compile(r"[0-9]+(?:\.[0-9]*)?|\.[0-9]+")
 ROLES = ("learns", "opponent", "out")
+# What closing the app does to the training it started. Stop is the default and
+# the only one a person gets without asking: a training left running on half the
+# cores after its window has gone is a machine that is slow for no reason anyone
+# can see. The other is a row in S and nothing else - no flag, no variable.
+AFTER_QUIT = ("stop", "keep training")
 VIEWS = {"d": "dash", "m": "match", "s": "settings", "w": "weights", "l": "log", "n": "new", "x": "export"}
 # The list views, and the lines above the first row of each, so the cursor's line is known.
 LIST_HEADS = {"settings": 3, "weights": 3, "new": 2, "export": 2}
@@ -288,7 +293,9 @@ def clean_settings(found: Dict[str, Any]) -> Dict[str, Any]:
         learn, against = teams[-1:], teams[:-1]
     elif against is None:
         against = [team for team in teams if team not in learn] + (learn if len(learn) > 1 else [])
-    return dict(settings, learn=learn, against=[team for team in against if team in teams])
+    after_quit = found.get("after_quit") if found.get("after_quit") in AFTER_QUIT else AFTER_QUIT[0]
+    return dict(settings, learn=learn, against=[team for team in against if team in teams],
+                after_quit=after_quit)
 
 
 def with_bundle(settings: Dict[str, Any], bundle: str) -> Dict[str, Any]:
@@ -411,6 +418,10 @@ def list_rows(ui: Dict[str, Any], view: str, force: Optional[Dict[str, Any]]) ->
         theirs = force and show_value(key, args.get(key))
         rows.append((kind, key, label, show_value(key, settings.get(key)), "", theirs,
                      force is not None and settings.get(key) != args.get(key)))
+    # In force: a trainer that watches its parent stops with the app; any other does not.
+    theirs = force and AFTER_QUIT[0 if args.get("stop_with_parent") is not None else 1]
+    rows.append(("quit", "after_quit", "After quit", settings["after_quit"], "", theirs,
+                 force is not None and theirs != settings["after_quit"]))
     return rows
 
 
@@ -464,7 +475,9 @@ def start_trainer(ui: Dict[str, Any]) -> None:
         rewards.write_rewards(weights, next_weights(ui)[0])
     if os.path.isfile(log_path) and os.path.getsize(log_path) > LOG_ROTATE_BYTES:
         os.replace(log_path, log_path + ".1")
-    argv = [sys.executable, "-m", "sdk.train"] + train_flags(ui)
+    stops_with_app = ui["saved"]["settings"]["after_quit"] == AFTER_QUIT[0]
+    argv = ([sys.executable, "-m", "sdk.train"] + train_flags(ui)
+            + ["--stop-with-parent", str(os.getpid())] * stops_with_app)
     with open(log_path, "a") as log:
         # Reads like the trainer's own lines, and teaches the flags.
         log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}.000 [INFO]: (sdk.tui) python -m sdk.train "
@@ -474,6 +487,10 @@ def start_trainer(ui: Dict[str, Any]) -> None:
                                  start_new_session=True)
     save_saved(ui, started={"pid": child.pid, "at": time.time()}, stop_sent=None)
     ui.update(child=child, ended=None, asked_stop=False)
+    # Kept across N and the picker, which forget ui["child"]: every one of these
+    # is stopped when the app closes, whichever run is on screen then.
+    if stops_with_app:
+        ui["stopping_with_app"].append(child)
 
 
 def stop_trainer(ui: Dict[str, Any]) -> bool:
@@ -1072,6 +1089,9 @@ def edit_row(ui: Dict[str, Any], back: bool = False) -> None:
         learn = [team for team in teams if roles[team] == "learns"]
         change_settings(ui, learn=learn, against=[team for team in teams if roles[team] == "opponent"]
                         + (learn if len(learn) > 1 else []))
+    elif kind == "quit":
+        change_settings(ui, after_quit=AFTER_QUIT[0] if back
+                        else AFTER_QUIT[(AFTER_QUIT.index(mine) + 1) % len(AFTER_QUIT)])
     elif back:
         defaults = clean_settings({})
         change_settings(ui, **(with_bundle(settings, defaults["bundle"]) if kind == "bundle"
@@ -1292,7 +1312,7 @@ def open_team(ui: Dict[str, Any], team: str) -> None:
     if runs:
         open_run(ui, runs[0])
     else:
-        threads = min(16, max(1, (os.cpu_count() or 1) - 2))
+        threads = max(1, (os.cpu_count() or 1) // 2)
         open_run(ui, free_run(team), clean_settings({
             "bundle": DEFAULT_BUNDLE, "learn": [team], "threads": threads,
             "against": list(bundle_teams(new_team.SHIPPED_BUNDLE))}))
@@ -1476,6 +1496,41 @@ def loop(ui: Dict[str, Any]) -> None:
                 break
 
 
+def stop_with_app(ui: Dict[str, Any]) -> None:
+    """SIGTERM to every training this app started to stop with it, then wait for each to save.
+
+    Waited for, and never killed: the trainer finishes the update in progress
+    and writes its checkpoint, which on a slow machine takes a while, and a
+    second key or signal meanwhile only says so. A trainer that does not hear
+    this (the app killed outright) stops by itself: it was started watching
+    this process.
+    """
+    going = [child for child in ui["stopping_with_app"] if child.poll() is None]
+    if not going:
+        return
+    say("Saving and stopping the training...\n")
+    for child in going:
+        try:
+            child.send_signal(signal.SIGTERM)
+        except OSError:
+            pass
+    while any(child.poll() is None for child in going):
+        try:
+            for child in going:
+                child.wait()
+        except (KeyboardInterrupt, SystemExit):
+            say("The training is saving; it stops by itself in a moment.\n")
+    say("The training has stopped and is saved.\n")
+
+
+def say(text: str) -> None:
+    """A line on the normal screen; on a terminal that has gone the write fails, and that is all."""
+    try:
+        os.write(1, text.encode())
+    except OSError:
+        pass
+
+
 def farewell(ui: Dict[str, Any]) -> str:
     """The last line on the normal screen: where the training is, and the way back to it."""
     if ui["view"] in ("teams", "welcome"):
@@ -1552,6 +1607,7 @@ def main():
     # only for a signal its parent handles, and a match is ended with SIGINT.
     signal.signal(signal.SIGINT, signal.default_int_handler)
     ui = {"mode": args.graphics, "graphics": "blocks", "size": None, "quit": False, "prompt": None,
+          "stopping_with_app": [],
           "flash": None, "flash_until": 0.0, "bell": False, "out": "", "rival": 0, "looked": 0.0, "match": None,
           "results": {"new": [], "export": []}, "forms": {
               "new": {"name": "", "colour": "", "players": "", "start": None},
@@ -1569,6 +1625,7 @@ def main():
         failure = f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}"
     finally:
         leave_screen(ui)
+        stop_with_app(ui)
     if failure:
         logger.error(failure)
         sys.exit(1)

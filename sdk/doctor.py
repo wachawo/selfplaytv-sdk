@@ -186,9 +186,9 @@ def check_speed(train: Any, threads: int) -> bool:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="python -m sdk.doctor",
                                      description="Check the installation and measure the speed of play")
-    parser.add_argument("--threads", type=int, default=min(16, os.cpu_count() or 1),
+    parser.add_argument("--threads", type=int, default=max(1, (os.cpu_count() or 1) // 2),
                         help="threads for the measurement, as sdk.train --threads "
-                             "(default: the CPUs, 16 at most)")
+                             "(default: half the CPUs)")
     args = parser.parse_args()
     if args.threads < 1:
         parser.error("--threads must be at least 1")

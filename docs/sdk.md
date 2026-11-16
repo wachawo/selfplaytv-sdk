@@ -153,7 +153,7 @@ do: `WARN` works as it is, more slowly or more narrowly than it could, and
   (10,000 and 26,000 agent-steps a second).
 
 `--threads` is the thread count to measure on, as for `sdk.train`, and the
-default is the same: the CPUs, 16 at most.
+default is the same: half the CPUs.
 
 ## The commands at a glance
 
@@ -513,7 +513,7 @@ weights it was given and never takes a gradient step.
 | `--steps N` | none | stop after this many agent-steps in this process; counted afresh on every start |
 | `--device` | `cuda` if torch sees one, else `cpu` | the torch device |
 | `--gpu-memory FRACTION` | none | cap this process's share of the GPU's memory, for a shared card |
-| `--threads N` | the CPUs, 16 at most | threads for the simulation and for torch |
+| `--threads N` | half the CPUs | threads for the simulation and for torch |
 | `--seed N` | 0 | seeds the maps, the lineups, the ends, the sampled actions and the order each update reads its rollout in; the same seed, weights, flags and thread count repeat a run |
 | `--theme KEY` | all | train on one map theme: `warehouse`, `forest`, `canyon`, `snowbase`, `neon` |
 | `--checkpoint-every N` | 10 | save every N updates, and always on exit |
@@ -1293,8 +1293,9 @@ export one. It trains nothing and draws nothing itself: the trainer is
 `python -m sdk.train`, started as a process of its own; the match is
 `python -m sdk.demo` on a pseudo-terminal; a team and an export are
 `python -m sdk.new_team` and `python -m sdk.export_team`. Everything it shows
-is read again from the run directory every half second, so leaving it, losing
-the terminal or opening it again the next day never touches the trainer.
+is read again from the run directory every half second, so opening it again
+the next day finds a training that was left running. Leaving it stops the
+training it started, unless its settings say otherwise (below).
 
 | Argument | Default | Meaning |
 |---|---|---|
@@ -1367,7 +1368,7 @@ SELFPLAYTV: choose your team, or make a new one
 | Enter | on a team: open it, training and playing (below); on NEW TEAM: the form |
 | `C` | the form |
 | `D` | delete the team under the cursor, after one question (Y deletes, any other key keeps) that lists what goes: its entry in `my-bundle/teams.json` and `manifest.json`, its five `.pt` files, and every run under `runs/` that trains it. A team that is training is refused: open it and stop it with `T` first. WHITE TEAM, BLACK TEAM and `bundle/` are never touched. In the picker only; everywhere else `D` is the dashboard |
-| `Q` | leave; the teams still training are named on the way out |
+| `Q` | leave; a training this screen started is saved and stopped, and one left running in the background is named on the way out |
 
 The form asks for the team's name, its colour from seven named swatches
 (left and right; the first one no team in the bundle wears is chosen), and
@@ -1395,7 +1396,7 @@ with no question:
   stops the sequence, Enter starts it again, and `M` from any other view
   starts a match at once.
 - Everything else is the TUI as below: `D` for the scores, `T` to stop and
-  start, `Q` to leave with the training going on, and `bash start.sh` is the
+  start, `Q` to save and stop the training as you leave, and `bash start.sh` is the
   way back that the last line prints.
 
 With `RUN`, nothing of this applies: the TUI opens on the dashboard of that
@@ -1413,7 +1414,7 @@ run, and a match waits for Enter.
 | `L` | the end of `RUN/train.log` |
 | `N` | make a team: name, colour, five nicknames, a copy of a team or fresh networks; C runs `sdk.new_team`, and on success offers to open a run for the new team |
 | `X` | export a team, renamed if asked; C runs `sdk.export_team` |
-| `Q` | leave. The training goes on, and the last line printed says how to come back |
+| `Q` | leave. A training this screen started is saved and stopped first ("Saving and stopping the training..."); one it did not start goes on, and the last line printed says so |
 | Ctrl-C | leave when nothing trains; otherwise it asks whether to stop the training or leave; during a match it ends the match |
 | Esc | close a question or a text, end a match, or go back to the dashboard |
 | up, down, PgUp, PgDn | scroll, or move the cursor in a list |
@@ -1469,19 +1470,31 @@ TUI says so. Two TUIs may be open on the same run: they read the same files.
 
 ### Leaving, and losing the terminal
 
-The trainer runs in a session of its own, with no terminal and its output in
-a file. Q, a crash of the TUI, a closed terminal and a dropped ssh all leave
-it training, and `python -m sdk.tui RUN` shows it again. Q names the run it
-leaves training, and the one the TUI was opened on too when N moved it to
-another. Q with a restart
-pending leaves the trainer to stop and does not start it again; the line it
-prints gives the command that does. SIGTERM and SIGHUP restore the terminal
+Closing the TUI stops the training it started, whatever closes it: Q,
+Ctrl-C answered with leave, a closed terminal, a dropped ssh, SIGTERM, a
+crash, or SIGKILL. On the first four it sends the trainer SIGTERM, prints
+"Saving and stopping the training..." and waits while the update in progress
+finishes and the checkpoint is written; a key or a signal meanwhile only says
+the save is under way, and nothing is killed. A TUI that cannot run code any
+more (a crash, SIGKILL) is noticed by the trainer itself: the TUI starts it
+with the internal option `--stop-with-parent`, and the trainer stops the same
+way, with `stop_reason` "the app closed", once its parent has gone.
+
+The one exception is the row "After quit" in `S`. Set to "keep training" (it
+is "stop" until someone changes it, and there is no flag or variable for it),
+the next start from the TUI is left running when the TUI closes, in a session
+of its own with its output in a file, and `python -m sdk.tui RUN` shows it
+again. Like every other row it applies from the next start. A trainer the TUI
+did not start, by hand or from another TUI, is never stopped by leaving: Q
+names it, and `T` on its run stops it. Q with a restart pending leaves the
+trainer to stop and does not start it again; the line it prints gives the
+command that does. SIGTERM and SIGHUP restore the terminal
 and leave with status 0. A TUI killed with SIGKILL cannot restore anything
 and leaves the terminal raw on the alternate screen: type `reset` and Enter,
 although the letters do not show.
 
 A system where systemd's `KillUserProcesses=yes` is set ends every process of
-a login when it logs out, a trainer started from the TUI included.
+a login when it logs out, a trainer kept running from the TUI included.
 
 ## What must not change
 
