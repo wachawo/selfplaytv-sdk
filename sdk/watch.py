@@ -106,6 +106,11 @@ INK_LUMINANCE = (0.05, 0.8)
 # figure reads up to twice what it settles at.
 SETTLED_ROUNDS_PER_ARENA = 5
 
+# The width the frame is laid out for. The environment rides at the end of the
+# header's second line only in so far as that line stays inside it, so a narrow
+# terminal loses it before anything else and a wide one never wraps it.
+FRAME_COLUMNS = 100
+
 CUT_NOTE = "cut to fit this terminal; all of it: python -m sdk.watch RUN --once | less -S"
 
 
@@ -345,6 +350,30 @@ def paid_line(status: Dict[str, Any], colour: bool) -> Optional[str]:
     return f"paid     {', '.join(parts)} per player per round{span}"
 
 
+def environment_parts(status: Dict[str, Any]) -> List[str]:
+    """`torch 2.11.0`, `numba 0.66.0 tbb`, `py 3.12.3`, `sdk 2c71fbc`: libraries first, as far as known."""
+    found = get_dict(status, "environment")
+    parts = []
+    for key, label in (("torch", "torch"), ("numba", "numba"), ("python", "py"), ("commit", "sdk")):
+        value = get_text(found, key, "")
+        if key == "numba" and value:
+            value = f"{value} {get_text(found, 'threading_layer', '')}".rstrip()
+        if value:
+            parts.append(f"{label} {value}")
+    return parts
+
+
+def health_line(status: Dict[str, Any], colour: bool) -> Optional[str]:
+    """`health   stalled: no hits since update 40`, or None while learning moves."""
+    health = get_dict(status, "health")
+    stalled = get_text(health, "stalled", "")
+    if not stalled:
+        return None
+    since = get_number(health, "since_update")
+    text = f"stalled: {stalled}" + ("" if since is None else f" since update {int(since)}")
+    return "health   " + paint(text, colour, HIGHLIGHT_RGB, bold=True)
+
+
 def render_header(status: Dict[str, Any], run_dir: str, colour: bool, now: float) -> List[str]:
     run_name = os.path.basename(os.path.normpath(run_dir)) or run_dir
     title = paint("SELFPLAYTV SDK", colour, bold=True)
@@ -362,6 +391,10 @@ def render_header(status: Dict[str, Any], run_dir: str, colour: bool, now: float
         uptime = format_age(max(0.0, end - started))
     second = (f"phase {get_text(status, 'phase')}  device {get_text(status, 'device')}"
               f"  arenas {format_count(get_number(status, 'arenas'))}  up {uptime}")
+    for part in environment_parts(status):
+        if len(second) + 2 + len(part) > FRAME_COLUMNS:
+            break
+        second += "  " + part
     if stale:
         # Frozen numbers look exactly like a run that has stopped improving, so a
         # stale file says so in words.
@@ -381,6 +414,9 @@ def render_header(status: Dict[str, Any], run_dir: str, colour: bool, now: float
     paid = paid_line(status, colour)
     if paid:
         lines.append(paid)
+    health = None if measuring else health_line(status, colour)
+    if health:
+        lines.append(health)
     return lines
 
 

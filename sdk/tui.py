@@ -705,7 +705,10 @@ def state_rows(ui: Dict[str, Any]) -> Tuple[str, str]:
         facts = [f"loading the engine, {max(0.0, now - since):.0f} s", steps, saved_text]
     elif word == TRAINING:
         sps, up = watch.get_number(status, "sps"), watch.get_time(status, "started_at")
-        facts = [steps, "" if sps is None else f"{sps:,.0f}/s",
+        # First of the facts, where a cut row still shows it; which stall it is
+        # and since when are on the dashboard and in the log.
+        stalled = amber("stalled") if watch.get_text(watch.get_dict(status, "health"), "stalled", "") else ""
+        facts = [stalled, steps, "" if sps is None else f"{sps:,.0f}/s",
                  "" if up is None else f"up {watch.format_age(now - up)}", saved_text]
     elif word == STOPPING:
         sent = watch.get_dict(ui["saved"], "stop_sent")
@@ -792,7 +795,7 @@ def dash_lines(ui: Dict[str, Any]) -> List[str]:
     changed = [] if status.get("play_only") is True else watch.changed_rewards(status)
     return (watch.render_standings(status, width, True)
             + (["rewards  " + amber("  ".join(changed))] if changed else [])
-            + [line for line in [watch.paid_line(status, True)] if line]
+            + [line for line in [watch.paid_line(status, True), watch.health_line(status, True)] if line]
             + [f"phase    {watch.get_text(status, 'phase')}  {watch.learners_text(status, learners)}", ""]
             + watch.render_matches(status, width, True) + [""] + watch.render_players(status, True))
 

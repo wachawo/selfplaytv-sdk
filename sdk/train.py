@@ -34,8 +34,10 @@ import json
 import logging
 import math
 import os
+import platform
 import shutil
 import signal
+import subprocess
 import sys
 import time
 import traceback
@@ -93,6 +95,33 @@ RECENT_MATCHES = 20
 # off as unfinished: drawn rounds score for nobody, so two teams that both wait
 # out the clock could otherwise hold an arena -- and one pairing -- forever.
 MATCH_ROUND_CAP_FACTOR = 4
+
+# Learning is called stalled when one of the conditions below holds for this
+# many updates in a row. One update is noise, and a veteran's figures wander
+# from one to the next; twenty is a few hundred thousand steps at 16 arenas and
+# a million and a half at 64, long enough that a stall is not a bad rollout and
+# short enough to be said within minutes of a stall beginning.
+STALL_UPDATES = 20
+# The policy has stopped moving: an approx_kl that the log line prints as
+# 0.0000, and not one sample clipped. A veteran trains at the floor learning
+# rate (LEARNING_RATE_FLOOR, 6e-5) and still reads about 0.004 and 0.05, forty
+# times above this, so only a rate annealed to zero or updates that never run
+# come down here.
+STALL_KL = 1e-4
+# The entropy the log line prints is the heads' entropies weighted by
+# ENTROPY_MOVE, ENTROPY_TURN and ENTROPY_SHOOT, 0.044 for a uniform
+# policy. The shipped veterans, with the bonus annealed to its final fifth,
+# read 0.006 to 0.02; under 0.001 every head is all but certain of one action.
+STALL_ENTROPY = 1e-3
+# Each condition's name in status.json and the log, and what to try.
+STALL_ADVICE = {
+    "policy frozen": "approx_kl under {kl:g} and no clipped sample: unset LEARNING_RATE_FLOOR and "
+                     "ANNEAL_STEPS if they are set, and look above for 'update skipped' lines",
+    "entropy collapsed": "the entropy is under {entropy:g}, so every player repeats one action: lower "
+                         "the weights you raised, or start again from the bundle with --restart",
+    "no hits": "the learners hit nobody: a team that hides waits for the clock, so make timeout "
+               "more negative (--reward REWARD_TIMEOUT=-2), and check hit_taken is not far below -1",
+}
 
 STATUS_SECONDS = 1.0
 # A failing telemetry write is logged at most this often: it is retried every
@@ -616,6 +645,19 @@ def log_rewards(defaults: Dict[str, float], sources: Dict[str, str], resumed: bo
                        f"A run does not remember its weights; pass the same --rewards file to keep them")
 
 
+def warn_timeout_off() -> None:
+    """One line when the learners go unpunished for running out the clock.
+
+    The engine's default timeout weight is 0, and the drawn round's penalty
+    rarely reaches a side that hides: most rounds that end on time are won on
+    survivors. A run started without the example weights therefore trains a
+    team that may learn to wait, and nothing else in the log would say so.
+    """
+    if config.REWARD_TIMEOUT == 0:
+        logger.warning("The timeout penalty is off (REWARD_TIMEOUT 0), so waiting out the clock costs "
+                       "nothing; pass --rewards examples/rewards.lua or --reward REWARD_TIMEOUT=-2")
+
+
 def personality_scales(teams_doc: Dict[str, Any], nicks: List[str]) -> Dict[str, float]:
     """Each model's entropy scale, by nickname.
 
@@ -823,6 +865,10 @@ def new_telemetry(arenas: int, teams: List[str], team_of_model: List[str]) -> Di
         # What the learners were paid over the last closed tally window; see
         # note_reward_window.
         "reward_window": None,
+        # Updates in a row each stall condition has held, and the stall in
+        # force as status.json carries it, or None; see check_health.
+        "streaks": {name: 0 for name in STALL_ADVICE},
+        "health": None,
         "written_at": 0.0,
         "warned_at": None,
     }
@@ -955,6 +1001,41 @@ def note_reward_window(telemetry: Dict[str, Any], tally: Dict[str, np.ndarray], 
         logger.info(f"Reward per player per round over updates {first}-{last}: {paid}")
 
 
+def learner_hits(trainer: Any, telemetry: Dict[str, Any]) -> int:
+    """The hits the learners' models have in the open tally window."""
+    hits = trainer.tally["hits"]
+    return int(sum(hits[telemetry["members"][team]].sum() for team in telemetry["learners"]))
+
+
+def check_health(telemetry: Dict[str, Any], trainer: Any, stats: Dict[str, float], hits: int) -> None:
+    """Warn once when learning has stalled, and once when it moves again; never stop it.
+
+    Each condition counts the updates in a row it has held, and the first of
+    them to reach STALL_UPDATES is the stall in force. Said when it begins and
+    not on every update, because a stall goes on for as long as nobody acts on
+    it, and a line repeated a thousand times is a line nobody reads.
+    """
+    holds = {"policy frozen": stats["approx_kl"] < STALL_KL and stats["clip_fraction"] == 0.0,
+             "entropy collapsed": stats["entropy"] < STALL_ENTROPY,
+             "no hits": hits == 0}
+    for name, held in holds.items():
+        telemetry["streaks"][name] = telemetry["streaks"][name] + 1 if held else 0
+    stalled = [name for name, count in telemetry["streaks"].items() if count >= STALL_UPDATES]
+    before = telemetry["health"]
+    if not stalled:
+        if before is not None:
+            logger.info(f"Learning moves again at update {trainer.updates}: {before['stalled']} has cleared")
+            telemetry["health"] = None
+        return
+    name = stalled[0]
+    if before is not None and before["stalled"] == name:
+        return
+    since = trainer.updates - telemetry["streaks"][name] + 1
+    telemetry["health"] = {"stalled": name, "since_update": since}
+    advice = STALL_ADVICE[name].format(kl=STALL_KL, entropy=STALL_ENTROPY)
+    logger.warning(f"Learning has stalled, {name} since update {since}: {advice}. Training goes on")
+
+
 def steps_payload(telemetry: Dict[str, Any], trainer: Any) -> Dict[str, Any]:
     """The step counts status.json carries beside the counter itself.
 
@@ -1067,6 +1148,8 @@ def write_status(run: str, trainer: Any, telemetry: Dict[str, Any], header: Dict
     status.update(steps_payload(telemetry, trainer))
     if telemetry["reward_window"]:
         status["reward_window"] = telemetry["reward_window"]
+    if not header.get("play_only"):
+        status["health"] = telemetry["health"]
     try:
         write_json(os.path.join(run, STATUS_NAME), status)
     except OSError as exc:
@@ -1222,9 +1305,14 @@ def run_loop(args: argparse.Namespace, run: str, checkpoints: str, trainer: Any,
                 trainer.phase_idx = index
                 trainer_module.apply_phase(trainer, phase)
 
+            hits_before = learner_hits(trainer, telemetry)
             extra = trainer_module.collect_rollout(trainer, phase)
             stats = skip_learning(trainer) if args.play_only else trainer_module.learn(trainer)
             trainer_module.log_progress(trainer, stats, extra)
+            # Before the tally window is dropped below, which would take the
+            # hits of this update with it.
+            if not args.play_only:
+                check_health(telemetry, trainer, stats, learner_hits(trainer, telemetry) - hits_before)
             stop["abortable"] = False
             if trainer.updates % LOG_WINDOW_UPDATES == 0:
                 tally = trainer.tally
@@ -1292,7 +1380,54 @@ def build_header(args: argparse.Namespace, device: Any, learners: List[str], opp
         "play_only": args.play_only,
         "pid": os.getpid(),
         "args": vars(args),
+        "environment": environment_info(args.threads),
     }
+
+
+def sdk_commit() -> Optional[str]:
+    """The short commit of this checkout, or None when it is not a git checkout or git is missing.
+
+    Asked of the SDK's own directory, and only when that directory is itself
+    the repository: a copy unpacked inside some other repository would
+    otherwise be stamped with that one's commit.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    if not os.path.exists(os.path.join(root, ".git")):
+        return None
+    try:
+        done = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return done.stdout.strip() or None
+
+
+def threading_layer() -> Optional[str]:
+    """The numba threading layer in use, or None before a parallel kernel has run.
+
+    numba only picks its layer when the first parallel kernel is launched, so
+    this is read after kernels.warmup; asked earlier it raises.
+    """
+    import numba
+    try:
+        return numba.threading_layer()
+    except ValueError:
+        return None
+
+
+def environment_info(threads: int) -> Dict[str, Any]:
+    """What a run was trained with, for a result that cannot be reproduced elsewhere.
+
+    The same seed repeats a run only under the same libraries and thread
+    count, and the threading layer decides much of its speed, so a status.json
+    passed between people says what it was made under.
+    """
+    import numba
+    return {"python": platform.python_version(), "torch": torch.__version__, "numpy": np.__version__,
+            "numba": numba.__version__, "threading_layer": threading_layer(), "threads": threads,
+            "platform": platform.platform(), "commit": sdk_commit()}
 
 
 def main():
@@ -1363,6 +1498,7 @@ def main():
     # Nothing learns in a --play-only run, so its weights pay nobody.
     if not args.play_only:
         log_rewards(reward_defaults, reward_sources, resumed, os.path.join(run, STATUS_NAME))
+        warn_timeout_off()
     if resumed:
         resume_telemetry(telemetry, os.path.join(run, STATUS_NAME))
 

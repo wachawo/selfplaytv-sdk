@@ -13,6 +13,7 @@ for this document. Log lines are shown without their time stamp.
 
 - [The game](#the-game)
 - [Install](#install)
+- [sdk.doctor: check the installation](#sdkdoctor-check-the-installation)
 - [The commands at a glance](#the-commands-at-a-glance)
 - [Bundles](#bundles)
 - [sdk.new_team: create a team](#sdknew_team-create-a-team)
@@ -99,10 +100,54 @@ The package is developed and run on Linux. macOS should behave the same.
 On Windows use WSL: the code has fallbacks for a console without `fcntl` and
 `termios`, but they have not been run.
 
+## sdk.doctor: check the installation
+
+```bash
+python -m sdk.doctor --threads 2
+```
+
+```
+OK    python    3.12.3
+OK    numpy     2.4.6
+OK    torch     2.11.0+cu128
+OK    numba     0.66.0
+OK    tbb       present
+OK    layer     numba runs on the tbb layer, 2 threads
+OK    gpu       none visible to this CUDA 12.8 build of torch: training runs on the CPU, which is enough
+OK    cpus      24; this check plays on 2 threads
+OK    speed     16 arenas 26,217/s, 64 arenas 62,681/s agent-steps of play on 2 threads
+Usable: everything sdk.train needs is here
+```
+
+About fifteen seconds. Each line starts `OK`, `WARN` or `FIX` and says what to
+do: `WARN` works as it is, more slowly or more narrowly than it could, and
+`FIX` blocks training. It exits 0 when no line says `FIX`, and 1 when one does.
+
+- **python, numpy, torch, numba**: the version, against the oldest the SDK is
+  written for (Python 3.11, numpy 2.0, torch 2.4, numba 0.60), or why the
+  library does not import.
+- **tbb, layer**: whether TBB is there, and the threading layer numba actually
+  chose once the simulation has run. Without TBB it is `omp` or `workqueue`:
+  `WARN  layer  numba is using the omp layer and not TBB: install tbb`.
+- **gpu**: the card torch sees and its CUDA version, after one operation on
+  it, so a wheel built for newer cards is caught here and not at the first
+  update. None is fine: everything in this document ran on a CPU. On macOS a
+  line says whether MPS exists; `sdk.train` uses it only with `--device mps`,
+  which has not been run.
+- **speed**: WHITE TEAM against BLACK TEAM from `bundle/`, on the CPU, through
+  the trainer's own rollout with nothing learning, for two seconds at 16
+  arenas and two at 64. It is play alone. Training spends time in the update
+  too: on the machine above it ran at about two fifths of these figures
+  (10,000 and 26,000 agent-steps a second).
+
+`--threads` is the thread count to measure on, as for `sdk.train`, and the
+default is the same: the CPUs, 16 at most.
+
 ## The commands at a glance
 
 | Command | What it does | Writes |
 |---|---|---|
+| `python -m sdk.doctor` | checks the installation and measures the speed of play | nothing |
 | `python -m sdk.new_team` | creates your team in a bundle of your own | `my-bundle/` |
 | `python -m sdk.rewards FILE` | checks a reward weights file | nothing |
 | `python -m sdk.train` | trains teams against frozen ones; with `--play-only`, measures | the run directory |
@@ -405,6 +450,13 @@ Resumed without --rewards and without --reward: from here the run trains on the 
 
 Pass the same file on every start of a run.
 
+A learning start whose `timeout` is 0, the default, says once that nothing
+charges a round run out on the clock:
+
+```
+[WARNING] The timeout penalty is off (REWARD_TIMEOUT 0), so waiting out the clock costs nothing; pass --rewards examples/rewards.lua or --reward REWARD_TIMEOUT=-2
+```
+
 ## sdk.train: train a team
 
 ```bash
@@ -571,6 +623,25 @@ round.
 An agent-step is one decision of one player. An update is 128 decisions of
 each of the ten players in every arena: 81,920 agent-steps at 64 arenas.
 
+**When learning stalls.** A learning run watches three figures of every update
+and warns when one of them stays bad for 20 updates in a row:
+
+| Stall | Holds when | Usual cause |
+|---|---|---|
+| `policy frozen` | `kl` under 0.0001 and `clip` 0 | a learning rate annealed to zero (`LEARNING_RATE_FLOOR` or `ANNEAL_STEPS` set in the shell), or updates that are skipped |
+| `entropy collapsed` | `ent` under 0.001 | every player repeating one action: a weight pushed far from its default |
+| `no hits` | the learners hit nobody in the update | a team that has learned to hide |
+
+```
+[WARNING] Learning has stalled, policy frozen since update 1: approx_kl under 0.0001 and no clipped sample: unset LEARNING_RATE_FLOOR and ANNEAL_STEPS if they are set, and look above for 'update skipped' lines. Training goes on
+```
+
+It is said once, when the stall begins, and `Learning moves again at update
+N` when it clears. It never stops the run. The thresholds sit well below what
+a veteran shows: the shipped teams train at the floor learning rate and read
+`kl` about 0.004, `clip` about 0.05 and `ent` 0.006 to 0.02, and in the runs
+for this document copies of both trained without a warning.
+
 Who is winning is in the `Match` lines, and in the dashboard.
 
 ## The run directory
@@ -609,6 +680,10 @@ models that play in the run.
   "team_steps": {"MY TEAM": 2357499495, "WHITE TEAM": 2355451495, "BLACK TEAM": 2449122392},
   "reward_window": {"from_update": 46, "to_update": 50,
                     "teams": {"MY TEAM": {"reward": 253.331, "player_rounds": 640}}},
+  "environment": {"python": "3.12.3", "torch": "2.11.0+cu128", "numpy": "2.4.6", "numba": "0.66.0",
+                  "threading_layer": "tbb", "threads": 4,
+                  "platform": "Linux-6.11.0-29-generic-x86_64-with-glibc2.39", "commit": "88aeb97"},
+  "health": null,
   "matches": {"played": 44, "recent": []},
   "standings": {"MY TEAM": {"matches": 44, "won": 25, "lost": 19, "unfinished": 0, "rounds": 451,
                             "time": 0, "elimination": 318, "capture": 133, "draws": 5}},
@@ -637,6 +712,14 @@ hold every weight, and `matches.recent` is not empty.
   reads several times too high. So the key is absent until the second
   window of a start closes, ten updates into a new run, and in a `--play-only`
   run.
+- `environment` is what this start runs under, written once when it starts:
+  the versions of Python, torch, numpy and numba, numba's threading layer
+  (`tbb`, `omp` or `workqueue`), `--threads`, the operating system, and the
+  short commit of the SDK when it is a git checkout, else null. The device is
+  `device` above.
+- `health` is null while learning moves, and `{"stalled": "no hits",
+  "since_update": 40}` while one of the [stalls](#the-log-line-of-an-update)
+  holds. A `--play-only` run has no `health`.
 - `matches.recent` holds the last 20 finished matches, newest first, each in
   the shape of a `matches.jsonl` line.
 - `standings` counts finished matches only: a team's `rounds`, `time`,
@@ -780,7 +863,7 @@ python -m sdk.watch runs/my --once
 
 ```
 SELFPLAYTV SDK  run my  steps 2,007,040  updates 98  sps 12,414
-phase full arena  device cpu  arenas 16  up 3 min
+phase full arena  device cpu  arenas 16  up 3 min  torch 2.11.0+cu128  numba 0.66.0 tbb  py 3.12.3
 learning MY TEAM (2,356.46M steps of its own)  against WHITE TEAM, BLACK TEAM
 rewards  timeout -2 (my-bundle/rewards.lua)
 paid     MY TEAM +0.87 per player per round  (updates 91-95)
@@ -813,7 +896,8 @@ It reads `RUN/status.json` and nothing else, and needs only the standard
 library: no torch, no numpy, no engine. It can run on another machine against
 a run directory copied or synced from the one that trains.
 
-The frame is 96 columns wide and up to 46 lines high. In a smaller terminal
+The frame is 96 columns wide, 100 at most for the second line of the header,
+and up to 46 lines high. In a smaller terminal
 the right-hand columns and the bottom rows are cut, and the last line shown
 says so. `python -m sdk.watch runs/my --once | less -S` shows all of it. A run
 directory that does not exist is said to be missing, and one that has no
@@ -836,6 +920,11 @@ is written bold in the terminal's own colour.
   round, averaged over the last five updates. It appears when the second
   window of a start closes, ten updates into a new run: the first window is
   not kept, because it reads several times too high.
+- The second line ends in what the trainer runs under, `torch 2.11.0+cu128
+  numba 0.66.0 tbb py 3.12.3 sdk 88aeb97`, as much of it as keeps the line
+  within 100 columns.
+- `health   stalled: policy frozen since update 1` appears while learning has
+  stalled; see [when learning stalls](#the-log-line-of-an-update).
 - A status file that has not been rewritten for 15 seconds is called out:
   `status is 59 s old`. A run that has stopped shows it from then on.
 
@@ -1269,7 +1358,7 @@ answered after the trainer has gone sends no signal.
 |---|---|
 | `NO RUN` | nothing has trained in this directory yet |
 | `STARTING` | a trainer holds the run's lock and has not written its first status yet: importing, copying the bundle, compiling; a few seconds, longer on the first start on a machine |
-| `TRAINING` | it trains; the row shows its steps, speed, uptime and the age of its last save, which a new run has only after its first |
+| `TRAINING` | it trains; the row shows its steps, speed, uptime and the age of its last save, which a new run has only after its first, and starts with `stalled` while [learning has stalled](#the-log-line-of-an-update) |
 | `STOPPING` | a stop was sent; it finishes the update in progress, then saves |
 | `STOPPED` | it ended cleanly. The reason is shown when it was the budget (`--steps 30000 reached`), and `stopped before it began` for a stop sent while it was starting |
 | `FAILED` | it ended any other way: with its exit status when this TUI started it, `ended without a clean stop` when only the files say so, and `ended before its first status` when it died while loading. The last line of its log is under it |

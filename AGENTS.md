@@ -18,6 +18,7 @@ archive.
 bundle/                 the two shipped teams, WHITE TEAM and BLACK TEAM. Read, never written.
 examples/rewards.lua    the example reward weights file
 examples/quickstart.sh  the whole journey as one script, with small numbers
+sdk/doctor.py           check the installation
 sdk/new_team.py         create a team
 sdk/rewards.py          check a reward weights file
 sdk/train.py            train, and measure with --play-only
@@ -93,13 +94,19 @@ which is how an agent works through it.
 ### 0. Check the installation
 
 ```bash
-python -c "import torch, numpy, numba; print(torch.__version__, numpy.__version__, numba.__version__)"
+python -m sdk.doctor --threads 4
 python -m sdk.demo WHITE BLACK --matches 5 --summary
 ```
 
-**It worked if** the first line prints three versions, and the second, after
+**It worked if** the first command ends with `Usable: everything sdk.train
+needs is here` and exits 0, after about fifteen seconds, and the second, after
 about half a minute, prints five `Match WHITE TEAM ...` lines and two tables.
-The result is on standard output and the log on standard error, and the log
+Every line of the first starts `OK`, `WARN` or `FIX`: a `FIX` line says what
+to install, and a `WARN` line is worth telling the person (no TBB, a GPU torch
+cannot use) but does not stop the journey. Its `speed` line is play alone;
+training runs at about two fifths of it.
+
+The demo's result is on standard output and the log on standard error, and the log
 repeats each `Match` line as it is played: read the two together and there
 are ten. If an import fails, install as [docs/sdk.md](docs/sdk.md#install) says: torch
 first, then `pip install -r requirements.txt`.
@@ -447,3 +454,5 @@ written. The common ones:
 | `The learners are at different stages of the curriculum` (a warning) | a copied team and a fresh one share a `--learn`; stop and train them in separate runs |
 | `... holds files and ... has no sdk-run.json` | that directory is not a run of this SDK; give a new `--run` |
 | `The reward weights are not those of this run's last start` (a warning) | you resumed without the same `--rewards`; stop and start again with it |
+| `The timeout penalty is off` (a warning) | no weights file was given, or it keeps `timeout` at 0; pass `--rewards`, unless the person chose that |
+| `Learning has stalled, ...` (a warning) | the run goes on; tell the person, and try what the line says. The causes are in [docs/sdk.md](docs/sdk.md#the-log-line-of-an-update) |

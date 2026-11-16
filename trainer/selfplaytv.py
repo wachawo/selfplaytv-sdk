@@ -541,21 +541,35 @@ def award_teammates(trainer: Trainer, arenas: np.ndarray, shooters: np.ndarray,
 
     Without this the players on a side are independent duellists: nothing in the
     reward tells them that a teammate's success is their success too.
+
+    Every (hit, slot) pair is decided at once on a grid, and each model's share
+    goes into its buffer with one np.add.at. The training stays bit-identical to
+    a loop over hits and slots, because float32 sums depend on their order and
+    the order is kept: np.nonzero walks the grid hit by hit, a boolean pick
+    keeps that order, np.add.at adds its events one after another, and a model
+    holds one slot per arena, so every cell sees its hits in the order they came.
     """
     team = trainer.state.team
     share = np.float32(TEAM_BLEND_SHARE)
-    for k in range(arenas.size):
-        row = arenas[k]
-        for slot in range(trainer.n_players):
-            if team[slot] == team[shooters[k]] and slot != shooters[k]:
-                model = trainer.model_of_slot[row, slot]
-                buffer_mod.add_reward_scattered(
-                    trainer.buffers[model], np.array([fire_steps[k]]), np.array([row]),
-                    np.array([share * config.REWARD_HIT], dtype=np.float32))
-            elif team[slot] == team[victims[k]] and slot != victims[k]:
-                model = trainer.model_of_slot[row, slot]
-                buffer_mod.add_reward(trainer.buffers[model], t, np.array([row]),
-                                      np.array([share * config.REWARD_HIT_TAKEN], dtype=np.float32))
+    slots = np.arange(trainer.n_players)
+    # The shooter's side first: a slot on both sides of a friendly hit is paid
+    # as the shooter's teammate and not charged as the victim's.
+    shooter_side = (team[None, :] == team[shooters][:, None]) & (slots[None, :] != shooters[:, None])
+    victim_side = (~shooter_side & (team[None, :] == team[victims][:, None])
+                   & (slots[None, :] != victims[:, None]))
+    hit, slot = np.nonzero(shooter_side | victim_side)
+    paid = shooter_side[hit, slot]
+    rows = arenas[hit]
+    steps = np.where(paid, fire_steps[hit], t)
+    prices = np.array([share * config.REWARD_HIT, share * config.REWARD_HIT_TAKEN], dtype=np.float32)
+    amounts = prices[(~paid).astype(np.int64)]
+    # A shot fired before this rollout began has no step to be credited at; the
+    # victim's side is charged at t, which is always inside.
+    inside = (steps >= 0) & (steps < config.ROLLOUT_STEPS)
+    models = trainer.model_of_slot[rows, slot]
+    for m in np.unique(models[inside]).tolist():
+        pick = inside & (models == m)
+        np.add.at(trainer.buffers[m].reward, (steps[pick], rows[pick]), amounts[pick])
 
 
 def charge_shots(trainer: Trainer, fired: np.ndarray, t: int, penalty: float) -> None:

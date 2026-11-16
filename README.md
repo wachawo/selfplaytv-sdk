@@ -49,6 +49,9 @@ from the index in [Requirements](#requirements) instead.
 A GPU is optional. The networks are small and a run trains on a CPU, with
 about 1 GB of memory.
 
+`python -m sdk.doctor` checks all of this in about fifteen seconds and says
+what to fix, line by line.
+
 ## Step by step
 
 The same journey without the terminal screen: six commands, from the

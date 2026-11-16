@@ -53,3 +53,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   reference `docs/sdk.md`, and `examples/quickstart.sh`, the journey as one
   script.
 - `LICENSE`: MIT.
+- `python -m sdk.doctor`: checks the installation and says what to fix, a
+  line each: the versions of Python, torch, numpy and numba, TBB and the
+  threading layer numba uses, the GPU torch sees (MPS on macOS), the CPUs,
+  and the speed of WHITE TEAM against BLACK TEAM at 16 and 64 arenas. It
+  exits 1 when something blocks training.
+- `sdk.train` warns once, at a learning start, when the timeout weight is 0
+  and nothing charges a round that is waited out on the clock.
+- `sdk.train` warns once when learning stalls for 20 updates in a row: a
+  policy that no longer moves, an entropy that has collapsed, or learners
+  that hit nobody. It says what to try and keeps training. `status.json`
+  carries it as `health`, `sdk.watch` shows it in its header, and `sdk.tui`
+  marks the training row `stalled`.
+- `status.json` records the environment of each start under `environment`:
+  the Python, torch, numpy and numba versions, numba's threading layer, the
+  thread count, the platform and the SDK's git commit. `sdk.watch` shows the
+  versions at the end of its header's second line where they fit. Both new
+  keys are additions; the file's version stays 1.
+
+### Changed
+
+- The share of a hit paid to the shooter's and the victim's teammates is
+  credited with numpy instead of a Python loop per hit and slot. The order of
+  every sum is kept, and a seeded run writes byte-identical checkpoints.
