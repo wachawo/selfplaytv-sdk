@@ -7,6 +7,24 @@ it learns, and train it on your own machine against the two teams that ship
 here. You watch it in the terminal, as a dashboard of scores and as matches
 drawn in pixels, and export it as one archive.
 
+## Quick start
+
+Five commands, on a CPU, from nothing to your own team training:
+
+```bash
+git clone https://github.com/wachawo/selfplaytv-sdk && cd selfplaytv-sdk
+python3 -m venv .venv && . .venv/bin/activate
+pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install -r requirements.txt
+python -m sdk.new_team --name "MY TEAM" --colour "#12b5a6" --nicks Ada Bob Cy Dee Eve
+python -m sdk.tui runs/my-team
+```
+
+In the terminal screen that opens, `T` starts the training and stops it, `S`
+and `W` change its settings and reward weights, `M` plays a match of your team,
+`D` is the dashboard, and `Q` leaves while the training goes on. The keys are
+always listed at the bottom of the screen. With an NVIDIA GPU, install torch
+from the index in [Requirements](#requirements) instead.
+
 ## Requirements
 
 - Python 3.11 or newer.
@@ -31,9 +49,10 @@ drawn in pixels, and export it as one archive.
 A GPU is optional. The networks are small and a run trains on a CPU, with
 about 1 GB of memory.
 
-## Quickstart
+## Step by step
 
-Six commands, from the repository root, with the environment above active.
+The same journey without the terminal screen: six commands, from the
+repository root, with the environment above active.
 
 ```bash
 # 1. Your team: a name, a colour, five nicknames. It starts as a copy of WHITE TEAM.

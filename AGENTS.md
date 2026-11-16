@@ -85,6 +85,11 @@ Before step 1, get these from the person:
 
 ## The journey
 
+A person who wants to look before reading gets there with the five commands
+of the README's [Quick start](README.md#quick-start), which end in the
+terminal screen. The steps below are the same journey by single commands,
+which is how an agent works through it.
+
 ### 0. Check the installation
 
 ```bash
