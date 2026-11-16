@@ -4,8 +4,13 @@
 
     python -m sdk.tui [RUN] [--graphics auto|kitty|blocks]
 
-Run from the repository root; every key is on the bottom row. IT TRAINS
-NOTHING AND DRAWS NO MATCH ITSELF: the trainer is `python -m sdk.train`,
+Run from the repository root; every key is on the bottom row. Without RUN it is
+the guided path that start.sh opens: a list of one's own teams with NEW TEAM
+last, a form for a new one (a name, a colour, five players), and Enter on a
+team lands on it training and its matches playing one after another, with no
+key to press in between.
+
+IT TRAINS NOTHING AND DRAWS NO MATCH ITSELF: the trainer is `python -m sdk.train`,
 started detached with its log in RUN/train.log, the match is `python -m
 sdk.demo` on a pseudo-terminal, and a team and an export are `python -m
 sdk.new_team` and `python -m sdk.export_team`. What is true about a run is on
@@ -22,9 +27,11 @@ import argparse
 import json
 import logging
 import os
+import random
 import re
 import select
 import shlex
+import shutil
 import signal
 import struct
 import subprocess
@@ -111,6 +118,21 @@ FORMS = {"new": (("name", "Name"), ("colour", "Colour"), ("players", "Players"),
          "export": (("team", "Team"), ("name", "New name"), ("colour", "New colour"),
                     ("players", "New players"), ("into", "Into"))}
 REQUIRED = {"new": ("name", "colour", "players"), "export": ("team", "into")}
+
+# The guided path. The swatches are none of WHITE's and BLACK's, and each stands
+# at 5:1 or more against the demo's dark panel, where the team's name is written
+# in it; green is left out because one map theme in five is grass.
+SWATCHES = (("TEAL", "#12b5a6"), ("ORANGE", "#f08a24"), ("RED", "#e5484d"), ("GOLD", "#f2c230"),
+            ("PINK", "#f45fa6"), ("SKY", "#3ea6f0"), ("VIOLET", "#a07cf0"))
+# Short, and inside every rule a nickname has; five the bundle does not hold are offered.
+SUGGESTED_NICKS = ("Ada", "Bob", "Cy", "Dee", "Eve", "Fox", "Gus", "Hal", "Ivy", "Jet", "Kai", "Lou", "Max",
+                   "Ned", "Oz", "Pip", "Rex", "Sam", "Tom", "Uma", "Vic", "Wes", "Zoe")
+WELCOME_LABELS = ("Team name", "Colour") + tuple(f"Player {number}" for number in range(1, 6)) + ("",)
+NAME_ROW, COLOUR_ROW, START_ROW = 0, 1, len(WELCOME_LABELS) - 1
+NICK_ROWS = range(COLOUR_ROW + 1, START_ROW)
+# The weights a guided run learns by: the example's, which charge a round
+# waited out on the clock. The defaults do not, and a copy left to them learns to hide.
+EXAMPLE_REWARDS = os.path.join("examples", "rewards.lua")
 
 
 def short_path(path: str) -> str:
@@ -516,9 +538,15 @@ def pty_size(ui: Dict[str, Any]) -> bytes:
 
 
 def match_teams(ui: Dict[str, Any]) -> Optional[Tuple[str, str]]:
-    """The first learner, and the opponent Tab has stepped to among every other team of the bundle."""
-    learn = ui["saved"]["settings"]["learn"]
-    rivals = [team for team in bundle_teams(ui["saved"]["settings"]["bundle"]) if team not in learn[:1]]
+    """The first learner, and the opponent Tab has stepped to among every other team of the bundle.
+
+    On the guided path among its opponents only, which are WHITE and BLACK:
+    the matches shown are the ones the team is learning from.
+    """
+    settings = ui["saved"]["settings"]
+    learn = settings["learn"]
+    pool = settings["against"] if ui["guided"] else bundle_teams(settings["bundle"])
+    rivals = [team for team in pool if team not in learn[:1]]
     return (learn[0], rivals[ui["rival"] % len(rivals)]) if learn and rivals else None
 
 
@@ -533,6 +561,9 @@ def start_match(ui: Dict[str, Any]) -> None:
     argv = [sys.executable, "-m", "sdk.demo", "--bundle", ui["saved"]["settings"]["bundle"],
             "--graphics", ui["graphics"], *teams]
     argv += ["--run", ui["name"]] if saved_age(ui) is not None else []
+    if ui["guided"] and saved_age(ui) is None:
+        # Long enough to outlast the demo's loading and be read over the field.
+        flash(ui, f"{teams[0]} plays as it was made: the training has not saved yet", 15.0)
     process = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     os.close(slave)
     ui["match"] = {"process": process, "master": master, "held": b"", "text": b"", "result": b"",
@@ -661,9 +692,7 @@ def run_form(ui: Dict[str, Any]) -> None:
     done = subprocess.run([sys.executable] + argv, stdin=subprocess.DEVNULL, capture_output=True, text=True)
     ui["prompt"] = None
     if done.returncode != 0:
-        errors = [line.split(") ", 1)[-1] for line in done.stderr.splitlines() if "[ERROR]" in line]
-        last = (errors or done.stderr.strip().splitlines() or ["?"])[-1]
-        ui["results"][view] = textwrap.wrap("ERROR " + last, max(20, ui["size"].columns - 4),
+        ui["results"][view] = textwrap.wrap("ERROR " + refusal(done), max(20, ui["size"].columns - 4),
                                             initial_indent="  ", subsequent_indent="  ")
     elif view == "export":
         path = done.stdout.strip().splitlines()[-1]
@@ -677,6 +706,12 @@ def run_form(ui: Dict[str, Any]) -> None:
         settings = clean_settings({"bundle": out, "learn": teams[-1:], "against": teams[:-1]})
         ask(ui, f"Open {run} to train {teams[-1]}?  Enter open   other key: stay here",
             {"enter": lambda: open_run(ui, run, settings)})
+
+
+def refusal(done: subprocess.CompletedProcess) -> str:
+    """A command's own refusal: its last ERROR line without the log head, else its last line."""
+    errors = [line.split(") ", 1)[-1] for line in done.stderr.splitlines() if "[ERROR]" in line]
+    return (errors or done.stderr.strip().splitlines() or ["?"])[-1]
 
 
 # Drawing
@@ -762,8 +797,12 @@ def bottom_row(ui: Dict[str, Any]) -> str:
         return f"{prompt['label']}: {text}_   {tail}"
     if prompt is not None:
         return prompt["text"]
-    if ui["flash"] and time.monotonic() - ui["flash_at"] < FLASH_SECONDS:
+    if ui["flash"] and time.monotonic() < ui["flash_until"]:
         return amber(ui["flash"])
+    if view in ("teams", "welcome"):
+        keys = ([("Enter", "open"), ("C", "create"), ("D", "delete"), ("Q", "quit")] if view == "teams" else
+                [("Tab", "next field"), ("left, right", "colour"), ("Enter", "on START: go"), ("Esc", "back")])
+        return "  ".join(f"{BOLD}{key}{watch.RESET} {label} " for key, label in keys)
     keys = [("T", "stop" if ui["state"]["word"] in ALIVE else "start"), ("D", "dash"), ("M", "match"),
             ("S", "settings"), ("W", "weights"), ("L", "log"), ("N", "team"), ("X", "export"), ("Q", "quit")]
     lead = ([("C", "create"), ("Esc", "leave")] if view in FORMS else [] if view != "match"
@@ -855,6 +894,8 @@ def body_lines(ui: Dict[str, Any]) -> Tuple[List[str], List[str]]:
             f"LOG {os.path.join(ui['name'], LOG_NAME)}   trainer pid {pid}   up/down scroll   left/right pan"]
         return head, [watch.paint(short_log(line), True, RED) if "[ERROR]" in line else short_log(line)
                       for line in log_tail(ui["run"])]
+    if view in ("teams", "welcome"):
+        return [], picker_lines(ui) if view == "teams" else welcome_lines(ui)
     if view != "match":
         return [], dash_lines(ui) if view == "dash" else list_lines(ui)
     teams, saved = match_teams(ui), saved_age(ui)
@@ -907,7 +948,9 @@ def draw(ui: Dict[str, Any], forwarded: bytes = b"") -> None:
         rows = [(line, 0) for line in head] + [(line, pan) for line in shown]
         rows, first = rows + [("", 0)] * (room - len(rows)), 1
     if columns >= MIN_COLUMNS and lines >= MIN_LINES:
-        rows += [(row, 0) for row in state_rows(ui)] + [(bottom_row(ui), 0)]
+        # The picker and the form come before any run is open, so there is no state to show.
+        chrome = ("", "") if ui["view"] in ("teams", "welcome") else state_rows(ui)
+        rows += [(row, 0) for row in chrome] + [(bottom_row(ui), 0)]
     for number, (row, skip) in enumerate(rows, start=first):
         out.append(f"\x1b[{number};1H{watch.RESET}{fit(row, columns, skip)}{watch.RESET}{ERASE_LINE}")
     data = forwarded + "".join(out + [demo.FRAME_END, "\a" * ui["bell"]]).encode()
@@ -931,8 +974,8 @@ def read_keys() -> List[str]:
     return keys
 
 
-def flash(ui: Dict[str, Any], text: str) -> None:
-    ui["flash"], ui["flash_at"] = text, time.monotonic()
+def flash(ui: Dict[str, Any], text: str, seconds: float = FLASH_SECONDS) -> None:
+    ui["flash"], ui["flash_until"] = text, time.monotonic() + seconds
 
 
 def ask(ui: Dict[str, Any], text: str, keys: Dict[str, Callable[[], Any]]) -> None:
@@ -1112,6 +1155,9 @@ def handle_key(ui: Dict[str, Any], key: str) -> None:
     if ui["prompt"] is not None:
         answer(ui, key)
         return
+    if ui["view"] in ("teams", "welcome"):
+        welcome_key(ui, key)
+        return
     view, letter, word = ui["view"], key.lower() if len(key) == 1 else key, ui["state"]["word"]
     if key in ("ctrl-c", "esc") and playing(ui):
         stop_match(ui)
@@ -1127,6 +1173,8 @@ def handle_key(ui: Dict[str, Any], key: str) -> None:
     elif (letter in VIEWS or key == "esc") and VIEWS.get(letter, "dash") != view:
         stop_match(ui)
         ui.update(view=VIEWS.get(letter, "dash"), cursor=0, scroll=0, pan=0)
+        if ui["guided"] and ui["view"] == "match":
+            start_match(ui)
     elif key in ("left", "right"):
         ui["pan"] = max(0, ui["pan"] + (PAN if key == "right" else -PAN))
     elif key in ("up", "down", "pgup", "pgdn"):
@@ -1144,6 +1192,219 @@ def handle_key(ui: Dict[str, Any], key: str) -> None:
             start_match(ui)
     elif key == "enter" and view in LIST_HEADS or key == "backspace" and view in ("settings", "weights"):
         edit_row(ui, back=key == "backspace")
+
+
+# The guided path: the picker, the form, and a team opened straight into training and matches
+def run_learners(run: str) -> List[str]:
+    """The teams a run trains, by its tui.json, else by the sdk-run.json its first start wrote."""
+    for name, read in ((SETTINGS_NAME, lambda doc: watch.get_dict(doc, "settings").get("learn")),
+                       (train.MARKER_NAME, lambda doc: doc.get("learners"))):
+        try:
+            found = read(train.read_json(os.path.join(run, name)))
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(found, list):
+            return found
+    return []
+
+
+def own_teams() -> List[Tuple[str, Dict[str, Any], List[str]]]:
+    """(team, entry, its runs newest first) for each team of my-bundle that does not ship here."""
+    shipped, runs = bundle_teams(new_team.SHIPPED_BUNDLE), used_runs()
+    return [(team, entry, [run for run in runs if team in run_learners(run)])
+            for team, entry in bundle_teams(DEFAULT_BUNDLE).items() if team not in shipped]
+
+
+def run_held(run: str) -> bool:
+    return lock_held({"run": os.path.realpath(run), "free": None}, read_lock(run)[0])
+
+
+def picker_lines(ui: Dict[str, Any]) -> List[str]:
+    """The teams of one's own, a row each with what is known of its training, and NEW TEAM last."""
+    teams, lines = own_teams(), ["SELFPLAYTV: choose your team, or make a new one", ""]
+    ui["cursor"] = min(ui["cursor"], len(teams))
+    for index, (team, entry, runs) in enumerate(teams):
+        status = watch.load_status(runs[0]) if runs else None
+        steps = watch.get_number(status or {}, "run_steps")
+        facts = ("training" if runs and run_held(runs[0]) else "") + (
+            "" if steps is None else f"  {watch.format_millions(steps)} steps")
+        colour = watch.parse_colour(entry.get("colour")) or (128, 128, 128)
+        lines.append(f"{'  > ' if index == ui['cursor'] else '    '}{watch.paint('██', True, colour)} "
+                     f"{team:<18}{' '.join(entry.get('members') or []):<34}{facts.strip()}")
+    lines.append(f"{'  > ' if ui['cursor'] == len(teams) else '    '}+  NEW TEAM")
+    doomed = ui.get("doomed")
+    if doomed and ui["prompt"] is not None:
+        lines += ["", amber(f"  Delete {doomed['team']} for good. This goes, and cannot be brought back:"),
+                  amber(f"    its entry in {DEFAULT_BUNDLE}/{train.TEAMS_NAME} and {train.MANIFEST_NAME}"),
+                  amber(f"    its five networks: {', '.join(nick + '.pt' for nick in doomed['members'])}")]
+        lines += [amber(f"    its run {short_path(run)}, with everything trained there") for run in doomed["runs"]]
+    return lines
+
+
+def delete_team(ui: Dict[str, Any]) -> None:
+    """D in the picker: one question naming what goes; a team that is training is refused."""
+    teams = own_teams()
+    if ui["cursor"] >= len(teams):
+        flash(ui, "NEW TEAM is not a team yet: there is nothing to delete")
+        return
+    team, entry, runs = teams[ui["cursor"]]
+    if any(run_held(run) for run in runs):
+        # Refused, not stopped and deleted: a stop takes the rest of an update,
+        # and deleting under a trainer that is still saving is what must never happen.
+        flash(ui, f"{team} is training: open it, press T to stop it, then delete it here")
+        return
+    ui["doomed"] = {"team": team, "members": list(entry.get("members") or []), "runs": runs}
+
+    def confirm() -> None:
+        if any(run_held(run) for run in runs):
+            flash(ui, f"{team} started training meanwhile: nothing was deleted")
+            return
+        try:
+            new_team.remove_team(DEFAULT_BUNDLE, team)
+            for run in runs:
+                shutil.rmtree(run)
+        except (OSError, ValueError, KeyError) as exc:
+            flash(ui, f"Not deleted: {type(exc).__name__}: {str(exc)}", 15.0)
+            return
+        flash(ui, f"Deleted {team}")
+
+    ask(ui, f"Delete {team} and what is listed above?  Y delete   N keep", {"y": confirm})
+
+
+def free_run(team: str) -> str:
+    """runs/ and the team's run name, numbered on when a directory of that name holds anything."""
+    base = path = os.path.join("runs", new_team.run_name(team))
+    number = 1
+    while os.path.isdir(path) and os.listdir(path):
+        number += 1
+        path = f"{base}-{number}"
+    return path
+
+
+def open_team(ui: Dict[str, Any], team: str) -> None:
+    """Open the team's newest run, or a new one, start it training if it is not, and play its matches.
+
+    A new run learns against WHITE and BLACK by the example's weights, on all
+    the CPUs but two (16 at most): the two are for the demo, which plays on
+    one, and for the screen.
+    """
+    runs = [found for name, unused, found in own_teams() if name == team][0]
+    if runs:
+        open_run(ui, runs[0])
+    else:
+        threads = min(16, max(1, (os.cpu_count() or 1) - 2))
+        open_run(ui, free_run(team), clean_settings({
+            "bundle": DEFAULT_BUNDLE, "learn": [team], "threads": threads,
+            "against": list(bundle_teams(new_team.SHIPPED_BUNDLE))}))
+        os.makedirs(ui["run"], exist_ok=True)
+        shutil.copyfile(EXAMPLE_REWARDS, os.path.join(ui["run"], REWARDS_NAME))
+    word, problem = ui["state"]["word"], lineup_problem(ui["saved"]["settings"])
+    if problem:
+        flash(ui, problem)
+    elif word == STOPPING:
+        # A stop somebody sent is finishing: started again once it has saved.
+        ui["restart"] = True
+    elif word not in ALIVE:
+        start_trainer(ui)
+        advance(ui)
+    ui.update(view="match", rival=0)
+    start_match(ui)
+
+
+def new_welcome() -> Dict[str, Any]:
+    """The form: no name yet, the first swatch no team wears, five nicknames the bundle does not hold."""
+    teams = bundle_teams(DEFAULT_BUNDLE) or bundle_teams(new_team.SHIPPED_BUNDLE)
+    worn = {str(entry.get("colour")).lower() for entry in teams.values()}
+    taken = {nick.casefold() for entry in teams.values() for nick in entry.get("members") or []}
+    free = [nick for nick in SUGGESTED_NICKS if nick.casefold() not in taken]
+    swatch = next((index for index, (unused, colour) in enumerate(SWATCHES) if colour not in worn), 0)
+    return {"row": NAME_ROW, "name": "", "swatch": swatch, "nicks": random.sample(free, len(NICK_ROWS)),
+            "errors": {}}
+
+
+def welcome_lines(ui: Dict[str, Any]) -> List[str]:
+    """The form, the field being typed in marked by `>` and ending in `_`, a refusal under its field."""
+    form, width = ui["welcome"], max(20, ui["size"].columns - 8)
+    lines = ["Welcome to SELFPLAYTV. Name your team and its five players, and it starts training.", ""]
+    for row, label in enumerate(WELCOME_LABELS):
+        here = row == form["row"]
+        if row == COLOUR_ROW:
+            blocks = [watch.paint("██", True, watch.parse_colour(colour)) for unused, colour in SWATCHES]
+            value = " ".join(f"[{block}]" if index == form["swatch"] else f" {block} "
+                             for index, block in enumerate(blocks)) + f"  {SWATCHES[form['swatch']][0]}"
+        elif row == START_ROW:
+            value = f"{BOLD}{INVERSE} START {watch.RESET}" if here else "[ START ]"
+        else:
+            value = (form["name"] if row == NAME_ROW else form["nicks"][row - NICK_ROWS[0]]) + "_" * here
+        lines.append(f"{'  > ' if here else '    '}{label:<14}{value}")
+        lines += [amber("      " + piece) for piece in textwrap.wrap(form["errors"].get(row, ""), width)]
+    return lines + ["", "  It starts as a copy of WHITE TEAM, plays as well as WHITE from the first step,",
+                    "  and learns against WHITE TEAM and BLACK TEAM."]
+
+
+def submit_welcome(ui: Dict[str, Any]) -> None:
+    """sdk.new_team with what was typed, a copy of WHITE; its refusal goes under the field it is about."""
+    form = ui["welcome"]
+    values = {NAME_ROW: form["name"].strip(), **{row: form["nicks"][row - NICK_ROWS[0]].strip()
+                                                 for row in NICK_ROWS}}
+    form["errors"] = {row: "empty: type a name here" for row, value in values.items() if not value}
+    if not form["errors"]:
+        # Each nickname one argument, so a space typed into one is refused by the
+        # nickname rules in their own words rather than turning into six players.
+        argv = ["-m", "sdk.new_team", "--name", values[NAME_ROW], "--colour", SWATCHES[form["swatch"]][1],
+                "--nicks", *[values[row] for row in NICK_ROWS], "--from", "WHITE", "--out", DEFAULT_BUNDLE]
+        ui["prompt"] = {"kind": "working", "text": f"working: making {values[NAME_ROW]}, a copy of WHITE TEAM"}
+        draw(ui)
+        done = subprocess.run([sys.executable] + argv, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        ui["prompt"] = None
+        termios.tcflush(0, termios.TCIFLUSH)
+        if done.returncode == 0:
+            open_team(ui, list(bundle_teams(DEFAULT_BUNDLE))[-1])
+            return
+        error = refusal(done)
+        # sdk.new_team names the flag and the value it refuses: that is the field.
+        rows = [row for row in NICK_ROWS if error.startswith(f"--nicks {values[row]!r}")]
+        row = NAME_ROW if error.startswith("--name") else rows[-1] if rows else START_ROW
+        form["errors"] = {row: error.split(" ", 1)[1] if error.startswith("--") else error}
+    form["row"] = min(form["errors"])
+
+
+def welcome_key(ui: Dict[str, Any], key: str) -> None:
+    """A key in the picker or the form. The form is all typing, so only keys with no letter move."""
+    if ui["view"] == "teams":
+        count, letter = len(own_teams()), key.lower() if len(key) == 1 else key
+        if key in ("up", "down"):
+            ui["cursor"] = max(0, min(count, ui["cursor"] + (1 if key == "down" else -1)))
+        elif letter == "c" or key == "enter" and ui["cursor"] >= count:
+            ui.update(view="welcome", welcome=new_welcome())
+        elif key == "enter":
+            open_team(ui, own_teams()[ui["cursor"]][0])
+        elif letter == "d":
+            delete_team(ui)
+        elif letter in ("q", "ctrl-c"):
+            ui["quit"] = True
+        return
+    form = ui["welcome"]
+    row = form["row"]
+    if key == "ctrl-c":
+        ui["quit"] = True
+    elif key == "esc":
+        ui.update(view="teams", cursor=0)
+    elif key in ("tab", "down", "up") or key == "enter" and row not in (NICK_ROWS[-1], START_ROW):
+        form["row"] = (row + (-1 if key == "up" else 1)) % len(WELCOME_LABELS)
+    elif key == "enter":
+        submit_welcome(ui)
+    elif row == COLOUR_ROW and key in ("left", "right"):
+        form["swatch"] = (form["swatch"] + (1 if key == "right" else -1)) % len(SWATCHES)
+    elif row in (NAME_ROW, *NICK_ROWS) and (key == "backspace" or len(key) == 1 and key.isprintable()):
+        index = None if row == NAME_ROW else row - NICK_ROWS[0]
+        text = form["name"] if index is None else form["nicks"][index]
+        text = text[:-1] if key == "backspace" else text + key
+        if index is None:
+            form["name"] = text
+        else:
+            form["nicks"][index] = text
+        form["errors"].pop(row, None)
 
 
 # The program
@@ -1201,6 +1462,12 @@ def loop(ui: Dict[str, Any]) -> None:
             forwarded = pump_match(ui)
             if match["over"]:
                 stop_match(ui)
+                # A match that ended by itself, and only one that drew a field and
+                # exited cleanly: a demo that refuses would otherwise be asked again
+                # every few seconds. Each start reads the run's newest save.
+                if ui["guided"] and match["begun"] and match["process"].returncode == 0:
+                    ui["rival"] += 1
+                    start_match(ui)
         for key in read_keys() if 0 in ready else []:
             asked = ui["prompt"]
             handle_key(ui, key)
@@ -1211,6 +1478,11 @@ def loop(ui: Dict[str, Any]) -> None:
 
 def farewell(ui: Dict[str, Any]) -> str:
     """The last line on the normal screen: where the training is, and the way back to it."""
+    if ui["view"] in ("teams", "welcome"):
+        # Left before opening a team: the ones training from an earlier visit go on, and are named.
+        going = [f"{team} goes on training in {short_path(runs[0])}." for team, unused, runs in own_teams()
+                 if runs and run_held(runs[0])]
+        return "".join(line + "\n" for line in going) + "Back to your teams: bash start.sh\n"
     advance(ui)
     holder, word = ui["state"]["holder"], ui["state"]["word"]
     # The run this TUI was opened on, when N moved it to another: its trainer goes on too.
@@ -1226,28 +1498,35 @@ def farewell(ui: Dict[str, Any]) -> str:
                        f"python -m sdk.train {shlex.join(train_flags(ui))}\n")
     log = (OUTSIDE.split(": ")[1].capitalize() if ui["state"]["outside"] or holder is None
            else f"Log: {os.path.join(ui['name'], LOG_NAME)}")
-    return also + (f"Training goes on in the background{pid}. {log}. "
-                   f"Back to it: python -m sdk.tui {ui['name']}\n")
+    # The guided path was reached by start.sh, which needs no environment activated.
+    back = "bash start.sh" if ui["guided"] else f"python -m sdk.tui {ui['name']}"
+    return also + f"Training goes on in the background{pid}. {log}. Back to it: {back}\n"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m sdk.tui", description="Train, watch, set up, play and export from one screen")
     parser.add_argument("run", nargs="?", default=None,
-                        help="the run directory (default: the latest under runs/, else runs/<your team>)")
+                        help="the run directory; without it, the list of your teams to open or make one")
     parser.add_argument("--graphics", choices=("auto", "kitty", "blocks"), default="auto",
                         help="the match as kitty images where the terminal answers (auto, the default), "
                              "always, or as half blocks")
     return parser.parse_args()
 
 
-def pick_run() -> str:
-    """The latest run under runs/ that a TUI or sdk.train has used, else runs/ and the default learner."""
+def used_runs() -> List[str]:
+    """The runs under runs/ that a TUI or sdk.train has used, the most recently changed first."""
     found = [os.path.join("runs", name) for name in (os.listdir("runs") if os.path.isdir("runs") else [])]
     used = [path for path in found if any(os.path.isfile(os.path.join(path, name))
                                           for name in (SETTINGS_NAME, train.MARKER_NAME))]
+    return sorted(used, key=os.path.getmtime, reverse=True)
+
+
+def pick_run() -> str:
+    """The latest run under runs/ that a TUI or sdk.train has used, else runs/ and the default learner."""
+    used = used_runs()
     if used:
-        return max(used, key=os.path.getmtime)
+        return used[0]
     return os.path.join("runs", new_team.run_name((clean_settings({})["learn"] or ["my"])[0]))
 
 
@@ -1273,12 +1552,13 @@ def main():
     # only for a signal its parent handles, and a match is ended with SIGINT.
     signal.signal(signal.SIGINT, signal.default_int_handler)
     ui = {"mode": args.graphics, "graphics": "blocks", "size": None, "quit": False, "prompt": None,
-          "flash": None, "flash_at": 0.0, "bell": False, "out": "", "rival": 0, "looked": 0.0, "match": None,
+          "flash": None, "flash_until": 0.0, "bell": False, "out": "", "rival": 0, "looked": 0.0, "match": None,
           "results": {"new": [], "export": []}, "forms": {
               "new": {"name": "", "colour": "", "players": "", "start": None},
               "export": {"team": None, "name": "", "colour": "", "players": "", "into": "exports"}}}
     open_run(ui, run)
-    ui["first"] = ui["run"]
+    # Without RUN the picker comes first, every time, and the run shown is the one a team opens.
+    ui.update(first=ui["run"], guided=args.run is None, view="dash" if args.run else "teams")
     enter_screen(ui)
     failure = ""
     try:

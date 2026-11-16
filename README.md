@@ -9,23 +9,43 @@ drawn in pixels, and export it as one archive.
 
 ## Quick start
 
-Five commands, on a CPU, from nothing to your own team training:
+```bash
+git clone https://github.com/wachawo/selfplaytv-sdk && cd selfplaytv-sdk
+bash start.sh
+```
+
+Then choose NEW TEAM, type your team's name and pick its colour; the five
+players come with names already filled in. Enter on START, and your team is
+training against WHITE TEAM and BLACK TEAM while its matches play on the
+screen, one after another. `D` shows the scores, `T` stops the training and
+starts it again, and `Q` leaves while it goes on training. `bash start.sh`
+brings you back to the list of your teams.
+
+The first run installs everything into `.venv/` in this directory, which takes
+a few minutes; later runs open the screen at once. It needs Python 3.11 or
+newer, and on Linux or macOS nothing else (on Windows, use WSL).
+
+## By hand
+
+Five commands, on a CPU, from nothing to your own team training, for those who
+want to see each step:
 
 ```bash
 git clone https://github.com/wachawo/selfplaytv-sdk && cd selfplaytv-sdk
 python3 -m venv .venv && . .venv/bin/activate
 pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install -r requirements.txt
 python -m sdk.new_team --name "MY TEAM" --colour "#12b5a6" --nicks Ada Bob Cy Dee Eve
-python -m sdk.tui runs/my-team
+python -m sdk.tui runs/my
 ```
 
 In the terminal screen that opens, `T` starts the training and stops it, `S`
-and `W` change its settings and reward weights, `M` plays a match of your team,
-`D` is the dashboard, and `Q` leaves while the training goes on. The keys are
-always listed at the bottom of the screen. With an NVIDIA GPU, install torch
-from the index in [Requirements](#requirements) instead.
+and `W` change its settings and reward weights, `M` and then Enter play a
+match of your team, `D` is the dashboard, and `Q` leaves while the training
+goes on. The keys are always listed at the bottom of the screen. With an
+NVIDIA GPU, install torch from the index in [Requirements](#requirements)
+instead.
 
-## Requirements
+### Requirements
 
 - Python 3.11 or newer.
 - Linux or macOS. On Windows, use WSL.
@@ -52,7 +72,7 @@ about 1 GB of memory.
 `python -m sdk.doctor` checks all of this in about fifteen seconds and says
 what to fix, line by line.
 
-## Step by step
+### Step by step
 
 The same journey without the terminal screen: six commands, from the
 repository root, with the environment above active.
@@ -100,9 +120,9 @@ python -m sdk.tui runs/my
 
 The same journey from one terminal screen, by keys: `T` starts and stops the
 training, `S` and `W` change its settings and reward weights for the next
-start, `M` plays a match of the saved weights in the screen, `N` makes a team
-and `X` exports one. The trainer runs as a process of its own, so `Q`, a
-closed terminal or a dropped ssh leave it training, and the same command
+start, `M` and then Enter play a match of the saved weights in the screen, `N`
+makes a team and `X` exports one. The trainer runs as a process of its own, so
+`Q`, a closed terminal or a dropped ssh leave it training, and the same command
 brings the screen back. Here it is at 80 by 24, training NEON FOXES, a copy of
 WHITE TEAM that is paid less for rounds that end on the clock:
 

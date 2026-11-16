@@ -412,6 +412,47 @@ def check_team(args: argparse.Namespace, name: str, base: str, teams: Dict[str, 
     return source
 
 
+def remove_team(directory: str, name: str) -> List[str]:
+    """Take a team and its five networks out of a bundle of one's own; returns its nicknames.
+
+    No command calls it: sdk.tui does, for a team its owner chose to delete.
+    The reverse of commit_team's order, so a removal cut short leaves a bundle
+    that sdk.train still reads: teams.json first, and the team is gone; the
+    manifest next, and its models are gone; the files last, and what may be
+    left is a file nothing names. A shipped team, or anything in the shipped
+    bundle, is refused, whatever the bundle it is asked of.
+    """
+    if os.path.realpath(directory) == os.path.realpath(SHIPPED_BUNDLE):
+        raise ValueError(f"{directory} is the shipped bundle, which is only read")
+    shipped = train.read_json(os.path.join(SHIPPED_BUNDLE, train.TEAMS_NAME))["teams"]
+    if name in shipped:
+        raise ValueError(f"{name} ships with the repository and is never deleted")
+    handle = lock_bundle(directory)
+    try:
+        # Read directly and not by read_bundle: its refusals end the process,
+        # and the caller is a screen that has to stay up and say what failed.
+        teams_doc = train.read_json(os.path.join(directory, train.TEAMS_NAME))
+        manifest_file = os.path.join(directory, train.MANIFEST_NAME)
+        manifest = train.read_json(manifest_file)
+        if name not in teams_doc.get("teams", {}):
+            raise ValueError(f"no team {name!r} in {directory}")
+        members = list(teams_doc["teams"].pop(name)["members"])
+        scales = teams_doc.get("personality")
+        if isinstance(scales, dict):
+            teams_doc["personality"] = {nick: scale for nick, scale in scales.items() if nick not in members}
+        train.write_json(os.path.join(directory, train.TEAMS_NAME), teams_doc)
+        train.write_json(manifest_file, dict(manifest, nicks=[nick for nick in manifest.get("nicks") or []
+                                                             if nick not in members]))
+        for nick in members:
+            path = os.path.join(directory, f"{nick}.pt")
+            if os.path.isfile(path):
+                os.remove(path)
+    finally:
+        if handle is not None:
+            os.close(handle)
+    return members
+
+
 def run_name(name: str) -> str:
     """A run directory's name for a team: MY TEAM is my, NEON FOXES is neon-foxes."""
     words = name.lower()

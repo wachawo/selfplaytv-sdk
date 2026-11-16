@@ -70,6 +70,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   thread count, the platform and the SDK's git commit. `sdk.watch` shows the
   versions at the end of its header's second line where they fit. Both new
   keys are additions; the file's version stays 1.
+- `start.sh`: one command from a fresh clone to the screen. The first run
+  makes `.venv/`, installs torch from the index that fits the machine (CPU,
+  cu128 when `nvidia-smi` works, PyPI on macOS) and the requirements, and
+  says what to install, without sudo, when Python 3.11 or `python3-venv` is
+  missing; later runs open the screen at once.
+- `python -m sdk.tui` without a run is a guided path: a list of your own
+  teams with NEW TEAM last, a form for a new team (a name, a colour from seven
+  swatches, five players with free nicknames filled in), checked by
+  `sdk.new_team` itself with each refusal under its field, and D to delete a
+  team that is not training, after a question that lists what goes. A team
+  opened or just made goes straight to training, against WHITE TEAM and BLACK
+  TEAM by the example weights on all the CPUs but two, and to matches that
+  play one after another, alternating the two opponents, each with the run's
+  newest save. With a run named, the TUI is as it was.
+- `sdk.new_team.remove_team`, which takes a team and its five networks out of
+  a bundle of one's own in an order that leaves a readable bundle if it is cut
+  short. The TUI's delete calls it; no command does.
 
 ### Changed
 

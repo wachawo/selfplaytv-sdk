@@ -65,8 +65,20 @@ second. A team is five such networks, each with its own weights.
 
 ## Install
 
-Python 3.11 or newer. Install torch first, from the index that matches the
-machine, then the rest:
+`bash start.sh`, from the repository root or from anywhere else, does all of
+this into `.venv/` on its first run and then opens
+[the guided path](#the-guided-path-startsh) of `sdk.tui`; later runs skip the
+installation, which they recognise by `.venv` importing torch, numpy and numba.
+It takes torch from the CPU index, from the cu128 index when `nvidia-smi`
+works, and from PyPI on macOS. It never uses sudo: without Python 3.11 or
+newer, or on Debian and Ubuntu without `python3-venv`, it says what to install
+and stops. It runs `sdk.doctor` only when the installation did not take, to
+say what is missing; on success it skips it, because the doctor's speed check
+compiles the engine and plays for a while, and the first training start
+compiles the same engine anyway.
+
+By hand: Python 3.11 or newer. Install torch first, from the index that
+matches the machine, then the rest:
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
@@ -1286,7 +1298,7 @@ the terminal or opening it again the next day never touches the trainer.
 
 | Argument | Default | Meaning |
 |---|---|---|
-| `RUN` | the most recently changed directory under `runs/` that holds `tui.json` or `sdk-run.json`; with none, `runs/` and the name of the team that learns by default (`runs/black` with only the shipped bundle) | the run. Opening it creates nothing: the directory is made by the first thing written into it |
+| `RUN` | none: [the guided path](#the-guided-path-startsh) | the run. Opening it creates nothing: the directory is made by the first thing written into it |
 | `--graphics MODE` | `auto` | how a match is drawn, as for [sdk.demo](#graphics); the TUI asks the terminal once and tells the demo |
 
 It needs a POSIX terminal (Linux, macOS, WSL) of at least 60 columns by 12
@@ -1328,6 +1340,66 @@ PLAYERS
  now NEON FOXES v WHITE TEAM, BLACK TEAM  2 threads  cpu  16 arenas  until stopped
 T stop  D dash  M match  S settings  W weights  L log  N team  X export  Q quit
 ```
+
+### The guided path: start.sh
+
+```bash
+bash start.sh          # the same as python -m sdk.tui with no RUN, after installing
+```
+
+Without `RUN` the TUI opens on a list of your own teams, every time: the teams
+of `my-bundle` other than WHITE TEAM and BLACK TEAM, each with its colour, its
+five players and, when it has a run, the steps trained and whether it is
+training now. The last row is always NEW TEAM, and on a first visit it is the
+only one.
+
+```
+SELFPLAYTV: choose your team, or make a new one
+
+    ██ Neon Foxes        Kit Rook Max Uma Oz               training  0.21M steps
+  > ██ Teal Two          Wes Dee Ivy Ada Vic
+    +  NEW TEAM
+```
+
+| Key | Does |
+|---|---|
+| up, down | choose a row |
+| Enter | on a team: open it, training and playing (below); on NEW TEAM: the form |
+| `C` | the form |
+| `D` | delete the team under the cursor, after one question (Y deletes, any other key keeps) that lists what goes: its entry in `my-bundle/teams.json` and `manifest.json`, its five `.pt` files, and every run under `runs/` that trains it. A team that is training is refused: open it and stop it with `T` first. WHITE TEAM, BLACK TEAM and `bundle/` are never touched. In the picker only; everywhere else `D` is the dashboard |
+| `Q` | leave; the teams still training are named on the way out |
+
+The form asks for the team's name, its colour from seven named swatches
+(left and right; the first one no team in the bundle wears is chosen), and
+five players, filled in with free nicknames that can be typed over. Tab, up and
+down move between the fields, and Enter on the last player or on START sends
+it. It runs `python -m sdk.new_team --from WHITE --out my-bundle` with what
+was typed, so every rule is that command's own, and a refusal is shown under
+the field it is about with everything typed kept. Esc goes back to the list,
+Ctrl-C leaves; neither creates anything.
+
+A team opened from the list, or just made, goes straight to the match view,
+with no question:
+
+- Its newest run is opened, the one whose `tui.json` or `sdk-run.json` names
+  it as the learner. A team without one gets `runs/<its run name>`, numbered
+  on (`runs/neon-foxes-2`) if that directory already holds something, set to
+  learn against WHITE TEAM and BLACK TEAM with the weights of
+  `examples/rewards.lua` (the timeout penalty on), on all the CPUs but two, 16
+  at most. The two are for the match, which plays on one thread, and the screen.
+- The training starts at once if it is not running, and starts again after a
+  stop that is still finishing.
+- Matches play one after another without Enter, alternating WHITE TEAM and
+  BLACK TEAM. Each takes the run's newest save; before the first save it plays
+  the team as it was made, and the bottom row says so. Esc ends a match and
+  stops the sequence, Enter starts it again, and `M` from any other view
+  starts a match at once.
+- Everything else is the TUI as below: `D` for the scores, `T` to stop and
+  start, `Q` to leave with the training going on, and `bash start.sh` is the
+  way back that the last line prints.
+
+With `RUN`, nothing of this applies: the TUI opens on the dashboard of that
+run, and a match waits for Enter.
 
 ### Keys
 

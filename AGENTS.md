@@ -44,6 +44,15 @@ commands below: they print, exit and can be checked, and the screen cannot.
 A person may have the TUI open on the same run at the same time; it shows
 whatever an agent starts or stops there.
 
+A person can also skip every command: `bash start.sh` installs into `.venv/`
+on its first run and opens the TUI without a run, which is a list of their
+teams and a form for a new one. A team made there is a copy of WHITE in
+`my-bundle/`, trained in `runs/<its run name>` against WHITE and BLACK with
+the weights of `examples/rewards.lua`, and it starts training as soon as the
+form is sent. An agent keeps using the commands: `start.sh` ends in a screen
+it cannot read. A run the person made that way is an ordinary run, and the
+commands below work on it, with `--rewards RUN/rewards.lua` as rule 6 says.
+
 ## Rules
 
 1. Run every command from the repository root. `python` below is the
@@ -87,8 +96,8 @@ Before step 1, get these from the person:
 ## The journey
 
 A person who wants to look before reading gets there with the five commands
-of the README's [Quick start](README.md#quick-start), which end in the
-terminal screen. The steps below are the same journey by single commands,
+of the README's [By hand](README.md#by-hand), which end in the terminal
+screen. The steps below are the same journey by single commands,
 which is how an agent works through it.
 
 ### 0. Check the installation
