@@ -1,0 +1,18 @@
+# Everything the SDK imports besides torch: the simulation is numpy and numba.
+numpy>=2.0
+numba>=0.60
+# TBB, for numba's parallel loops. Without it numba falls back to OpenMP, whose
+# workers spin between calls, and training runs at a fraction of its speed.
+# The wheel exists for x86-64 only; elsewhere install the system package
+# (libtbb12 on Debian and Ubuntu) or keep --threads low.
+tbb>=2021.6; platform_machine == "x86_64" or platform_machine == "AMD64"
+#
+# torch (2.4 or newer) is not listed on purpose. Install it FIRST, from the
+# index that matches your machine, and this file second: pip cannot choose an
+# index per package from a requirements file, and the default wheel is a large
+# CUDA build that a CPU-only machine cannot use.
+#
+#   CPU only      pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   NVIDIA GPU    the command https://pytorch.org/get-started/locally/ gives for your card
+#
+# A GPU is optional. The networks are small and a run trains on a CPU.

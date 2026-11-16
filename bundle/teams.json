@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "teams": {
+    "WHITE TEAM": {
+      "colour": "#eef1f4",
+      "members": [
+        "Hiroshi",
+        "Kenji",
+        "Takeshi",
+        "Haruto",
+        "Yota"
+      ]
+    },
+    "BLACK TEAM": {
+      "colour": "#1b1e23",
+      "members": [
+        "Ivan",
+        "Dmitriy",
+        "Maksim",
+        "Aleksey",
+        "Artyom"
+      ]
+    }
+  },
+  "personality": {
+    "Hiroshi": 1.1,
+    "Kenji": 0.7,
+    "Takeshi": 0.95,
+    "Haruto": 1.2,
+    "Yota": 1.05,
+    "Ivan": 0.9,
+    "Dmitriy": 1.15,
+    "Maksim": 0.75,
+    "Aleksey": 1.0,
+    "Artyom": 1.1
+  }
+}

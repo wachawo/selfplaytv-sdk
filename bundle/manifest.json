@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "nicks": [
+    "Hiroshi",
+    "Kenji",
+    "Takeshi",
+    "Haruto",
+    "Yota",
+    "Ivan",
+    "Dmitriy",
+    "Maksim",
+    "Aleksey",
+    "Artyom"
+  ],
+  "obs_size": 186,
+  "max_team_size": 5,
+  "team_size": 5,
+  "steps": 0,
+  "updates": 0,
+  "generation": 0,
+  "saved_at": 1794830470.9991298,
+  "phase": "full arena (30x20m, 18 obstacles, 60s, hold 5.0s, autofire=off)"
+}

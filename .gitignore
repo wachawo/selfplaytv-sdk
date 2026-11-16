@@ -1,0 +1,66 @@
+# IDE
+.idea/
+.vscode/
+.cursor/
+.claude/
+.codex
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+# Anchored to the root on purpose. Unanchored, `env/` matches a directory of
+# that name at any depth, and engine/env holds the simulation.
+/env/
+.eggs/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Models / weights cache
+# Checkpoints are ignored wherever they turn up, except the two teams that ship
+# in bundle/. Your own bundles, your runs and your exports are working
+# directories and stay out of the repository. The pattern for bundles is wide
+# on purpose: it also covers a snapshot such as my-bundle-trained/ and the
+# my-bundle.<pid>.tmp/ that sdk.new_team builds in before it renames it.
+.cache/
+*.onnx
+*.bin
+*.pt
+*.ckpt
+*.safetensors
+!/bundle/*.pt
+/my-bundle*/
+/runs/
+/exports/
+
+# Logs
+logs/
+*.log
+*.csv
+
+# Docs
+*.md
+!README.md
+!CHANGELOG.md
+!CONTRIBUTING.md
+!AGENTS.md
+!docs/**/*.md
